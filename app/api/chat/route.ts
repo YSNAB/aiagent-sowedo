@@ -38,13 +38,10 @@ async function isSafeInput(
     return 'ERROR'
   }
 
-  console.log('Guard API response status:', res.status)
-
   if (!res.ok) return 'ERROR'
 
   const data = await res.json()
-  console.log('Guard response:', data)
-  console.log('Message: ', data?.choices?.[0]?.message)
+
   const verdict: string = data?.choices?.[0]?.message?.content?.trim().toUpperCase() ?? ''
   if (verdict === 'SAFE') return 'SAFE'
   if (verdict === 'UNSAFE') return 'UNSAFE'
