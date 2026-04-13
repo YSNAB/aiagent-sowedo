@@ -38,4 +38,7 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
+
+# sowedo intake sessions
+/sessions
 next-env.d.ts

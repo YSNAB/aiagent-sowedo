@@ -22,6 +22,11 @@ export default function Home() {
   const [loading, setLoading] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const sessionId = useRef<string>('')
+
+  useEffect(() => {
+    sessionId.current = crypto.randomUUID()
+  }, [])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -42,7 +47,7 @@ export default function Home() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: history }),
+        body: JSON.stringify({ messages: history, sessionId: sessionId.current }),
       })
 
       if (!res.ok || !res.body) {
@@ -71,9 +76,11 @@ export default function Home() {
             const parsed = JSON.parse(data)
             const delta = parsed.choices?.[0]?.delta?.content ?? ''
             assistantContent += delta
+            // Strip hidden lead score comment before rendering
+            const displayContent = assistantContent.replace(/<!--LEAD_SCORE:[\s\S]*?-->/g, '').trimEnd()
             setMessages(prev => {
               const updated = [...prev]
-              updated[updated.length - 1] = { role: 'assistant', content: assistantContent, time: updated[updated.length - 1].time }
+              updated[updated.length - 1] = { role: 'assistant', content: displayContent, time: updated[updated.length - 1].time }
               return updated
             })
           } catch {
