@@ -202,7 +202,7 @@ export async function POST(request: NextRequest) {
             '3. Pain point (Pijnpunt) — e.g. "What would you say is the biggest challenge you\'re currently running into?"\n' +
             '4. Desired outcome (Wens) — e.g. "And if we could help you with that — what would the ideal outcome look like for you?"\n' +
             '5. Budget indication (Budget) — e.g. "To make sure we propose something that fits, do you have a rough budget range in mind for this project? Even a ballpark helps us point you in the right direction."\n' +
-            '6. Contact person (Contactpersoon) — e.g. "Great, and who should we follow up with? Could I get your name and the best way to reach you?"\n' +
+            '6. Contact person (Contactpersoon) — When you reach this step, include the exact marker [CONTACT_FORM] somewhere in your message so the UI can display a contact form. Example: "Great, to wrap things up I\'d love to get your contact details. [CONTACT_FORM]"\n' +
             '\n\n' +
             'After collecting all six pieces of information, do the following in your closing message:\n' +
             '1. Summarise what you have learned in a brief, friendly recap.\n' +

@@ -6,10 +6,78 @@ type Message = {
   role: 'user' | 'assistant'
   content: string
   time: string
+  hidden?: boolean
+}
+
+type ContactData = {
+  name: string
+  email: string
+  phone: string
+  company: string
 }
 
 function now() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+function ContactForm({ onSubmit, disabled }: { onSubmit: (data: ContactData) => void; disabled: boolean }) {
+  const [form, setForm] = useState<ContactData>({ name: '', email: '', phone: '', company: '' })
+  const [errors, setErrors] = useState<Partial<ContactData>>({})
+
+  function validate() {
+    const e: Partial<ContactData> = {}
+    if (!form.name.trim()) e.name = 'Required'
+    if (!form.email.trim()) e.email = 'Required'
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = 'Invalid email'
+    if (!form.phone.trim()) e.phone = 'Required'
+    if (!form.company.trim()) e.company = 'Required'
+    setErrors(e)
+    return Object.keys(e).length === 0
+  }
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (validate()) onSubmit(form)
+  }
+
+  const field = (
+    key: keyof ContactData,
+    label: string,
+    type = 'text',
+    placeholder = ''
+  ) => (
+    <div className="flex flex-col gap-1">
+      <label className="text-xs text-white/50 font-medium">{label} <span className="text-indigo-400">*</span></label>
+      <input
+        type={type}
+        value={form[key]}
+        onChange={e => setForm(p => ({ ...p, [key]: e.target.value }))}
+        placeholder={placeholder}
+        disabled={disabled}
+        className={`bg-white/5 border rounded-lg px-3 py-2 text-sm text-white placeholder-white/20 outline-none transition-all disabled:opacity-50 ${
+          errors[key] ? 'border-red-500/60 focus:border-red-500' : 'border-white/10 focus:border-indigo-500/60 focus:ring-1 focus:ring-indigo-500/20'
+        }`}
+      />
+      {errors[key] && <span className="text-[11px] text-red-400">{errors[key]}</span>}
+    </div>
+  )
+
+  return (
+    <form onSubmit={handleSubmit} className="mt-2 rounded-2xl border border-indigo-500/20 bg-white/5 p-4 flex flex-col gap-3 w-full">
+      <p className="text-xs text-white/40 font-medium uppercase tracking-wider">Your contact details</p>
+      {field('name', 'Full name', 'text', 'Jane Doe')}
+      {field('email', 'Email address', 'email', 'jane@company.com')}
+      {field('phone', 'Phone number', 'tel', '+31 6 12345678')}
+      {field('company', 'Company name', 'text', 'Acme BV')}
+      <button
+        type="submit"
+        disabled={disabled}
+        className="mt-1 w-full rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-2.5 text-sm font-semibold text-white transition-colors shadow-lg shadow-indigo-500/20"
+      >
+        Send to Sowedo →
+      </button>
+    </form>
+  )
 }
 
 export default function Home() {
@@ -20,6 +88,9 @@ export default function Home() {
   }])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [showContactForm, setShowContactForm] = useState(false)
+  const [contactSubmitted, setContactSubmitted] = useState(false)
+  const [contactFormMsgIndex, setContactFormMsgIndex] = useState<number | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const sessionId = useRef<string>('')
@@ -30,7 +101,7 @@ export default function Home() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  }, [messages, showContactForm, contactSubmitted])
 
   async function sendMessage(e: FormEvent) {
     e.preventDefault()
@@ -76,8 +147,21 @@ export default function Home() {
             const parsed = JSON.parse(data)
             const delta = parsed.choices?.[0]?.delta?.content ?? ''
             assistantContent += delta
-            // Strip hidden lead score comment before rendering
-            const displayContent = assistantContent.replace(/<!--LEAD_SCORE:[\s\S]*?-->/g, '').trimEnd()
+
+            // Detect contact form trigger
+            if (assistantContent.includes('[CONTACT_FORM]')) {
+              setShowContactForm(true)
+              setMessages(prev => {
+                setContactFormMsgIndex(prev.length - 1)
+                return prev
+              })
+            }
+
+            const displayContent = assistantContent
+              .replace(/\[CONTACT_FORM\]/g, '')
+              .replace(/<!--LEAD_SCORE:[\s\S]*?-->/g, '')
+              .trimEnd()
+
             setMessages(prev => {
               const updated = [...prev]
               updated[updated.length - 1] = { role: 'assistant', content: displayContent, time: updated[updated.length - 1].time }
@@ -94,6 +178,91 @@ export default function Home() {
         ...prev,
         { role: 'assistant', content: message, time: now() },
       ])
+    } finally {
+      setLoading(false)
+      inputRef.current?.focus()
+    }
+  }
+
+  async function handleContactSubmit(data: ContactData) {
+    setLoading(true)
+    setContactSubmitted(true)
+    setShowContactForm(false)
+
+    // Save contact details (non-blocking)
+    fetch('/api/contact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...data, sessionId: sessionId.current }),
+    }).catch(() => {})
+
+    // Hidden trigger message — tells Bob the form was submitted
+    const trigger: Message = {
+      role: 'user',
+      content: '[CONTACT_FORM_SUBMITTED] The user has just filled in and submitted their contact details via the contact form.',
+      time: now(),
+      hidden: true,
+    }
+
+    let history: Message[] = []
+    setMessages(prev => {
+      history = [...prev, trigger]
+      return history
+    })
+
+    // Give React one tick to flush state before we read history
+    await new Promise(r => setTimeout(r, 0))
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: history, sessionId: sessionId.current }),
+      })
+
+      if (!res.ok || !res.body) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData?.error ?? 'Request failed')
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let assistantContent = ''
+
+      setMessages(prev => [...prev, { role: 'assistant', content: '', time: now() }])
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const chunk = decoder.decode(value, { stream: true })
+        for (const line of chunk.split('\n')) {
+          if (!line.startsWith('data: ')) continue
+          const data = line.slice(6).trim()
+          if (data === '[DONE]') continue
+          try {
+            const parsed = JSON.parse(data)
+            const delta = parsed.choices?.[0]?.delta?.content ?? ''
+            assistantContent += delta
+
+            const displayContent = assistantContent
+              .replace(/\[CONTACT_FORM\]/g, '')
+              .replace(/<!--LEAD_SCORE:[\s\S]*?-->/g, '')
+              .trimEnd()
+
+            setMessages(prev => {
+              const updated = [...prev]
+              updated[updated.length - 1] = { role: 'assistant', content: displayContent, time: updated[updated.length - 1].time }
+              return updated
+            })
+          } catch {
+            // skip malformed chunks
+          }
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Something went wrong. Please try again.'
+      setMessages(prev => [...prev, { role: 'assistant', content: message, time: now() }])
     } finally {
       setLoading(false)
       inputRef.current?.focus()
@@ -134,7 +303,7 @@ export default function Home() {
 
         {/* ── Messages ── */}
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4 custom-scrollbar">
-          {messages.map((msg, i) => (
+          {messages.map((msg, i) => msg.hidden ? null : (
             <div
               key={i}
               className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -145,9 +314,9 @@ export default function Home() {
                 </div>
               )}
 
-              <div className="flex flex-col gap-1">
+              <div className="flex flex-col gap-1 max-w-[75%]">
                 <div
-                  className={`max-w-full rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap wrap-break-word ${
+                  className={`rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap wrap-break-word ${
                     msg.role === 'user'
                       ? 'bg-indigo-600/80 text-white rounded-br-sm shadow-lg shadow-indigo-500/20'
                       : 'bg-white/7 text-white/90 border border-white/10 rounded-bl-sm'
@@ -166,6 +335,19 @@ export default function Home() {
                   <span className={`text-[10px] text-white/25 px-1 ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
                     {msg.time}
                   </span>
+                )}
+
+                {/* Contact form — rendered below the triggering Bob message */}
+                {msg.role === 'assistant' && i === contactFormMsgIndex && showContactForm && !contactSubmitted && (
+                  <ContactForm onSubmit={handleContactSubmit} disabled={loading} />
+                )}
+
+                {/* Confirmation after submission */}
+                {msg.role === 'assistant' && i === contactFormMsgIndex && contactSubmitted && !showContactForm && (
+                  <div className="mt-2 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-300 flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" className="shrink-0"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
+                    Contact details sent to Sowedo!
+                  </div>
                 )}
               </div>
 
@@ -187,14 +369,14 @@ export default function Home() {
               type="text"
               value={input}
               onChange={e => setInput(e.target.value)}
-              placeholder="Message Bob…"
-              disabled={loading}
+              placeholder={showContactForm ? 'Fill in the form above…' : 'Message Bob…'}
+              disabled={loading || showContactForm}
               autoComplete="off"
               className="flex-1 bg-white/7 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/30 outline-none focus:border-indigo-500/60 focus:ring-1 focus:ring-indigo-500/30 transition-all disabled:opacity-50"
             />
             <button
               type="submit"
-              disabled={loading || !input.trim()}
+              disabled={loading || !input.trim() || showContactForm}
               className="shrink-0 w-10 h-10 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center transition-colors shadow-lg shadow-indigo-500/20"
               aria-label="Send message"
             >
