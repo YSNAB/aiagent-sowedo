@@ -14,39 +14,49 @@ async function isSafeInput(
   apiKey: string,
   baseUrl: string,
   model: string,
-): Promise<boolean> {
-  const res = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: GUARD_PROMPT },
-        { role: 'user', content: lastUserMessage },
-      ],
-      stream: false,
-      
+): Promise<'SAFE' | 'UNSAFE' | 'ERROR'> {
+  let res: Response
+  try {
+    res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'moonshot-v1-8k', // smallest/fastest Kimi model — sufficient for a one-word verdict
+        messages: [
+          { role: 'system', content: GUARD_PROMPT },
+          { role: 'user', content: lastUserMessage },
+        ],
+        stream: false,
+        temperature: 0.6,
+        max_tokens: 256, // only needs to output SAFE or UNSAFE
     }),
-  })
+    })
+  } catch {
+    return 'ERROR'
+  }
 
-  if (!res.ok) return false // fail closed — treat as unsafe when guard call fails
+  console.log('Guard API response status:', res.status)
+
+  if (!res.ok) return 'ERROR'
 
   const data = await res.json()
-  console.log('Guard response:', data) // for debugging guard decisions
-  console.log('Message: ', data?.choices?.[0]?.message) // for debugging guard decisions
+  console.log('Guard response:', data)
+  console.log('Message: ', data?.choices?.[0]?.message)
   const verdict: string = data?.choices?.[0]?.message?.content?.trim().toUpperCase() ?? ''
-  return verdict === 'SAFE'
+  if (verdict === 'SAFE') return 'SAFE'
+  if (verdict === 'UNSAFE') return 'UNSAFE'
+  return 'ERROR'
 }
 
 export async function POST(request: NextRequest) {
   const { messages } = await request.json()
 
   const apiKey = process.env.KIMI_API_KEY
-  const baseUrl = process.env.KIMI_BASE_URL ?? 'https://api.moonshot.cn/v1'
-  const model = process.env.KIMI_MODEL ?? 'kimi-k2-5'
+  const baseUrl = process.env.KIMI_BASE_URL
+  const model = process.env.KIMI_MODEL
 
   if (!apiKey || !baseUrl || !model) {
     return Response.json(
@@ -61,8 +71,14 @@ export async function POST(request: NextRequest) {
     .find((m: { role: string; content: string }) => m.role === 'user')?.content
 
   if (lastUserMessage) {
-    const safe = isSafeInput(lastUserMessage)
-    if (!safe) {
+    const guard = await isSafeInput(lastUserMessage, apiKey, baseUrl, model)
+    if (guard === 'ERROR') {
+      return Response.json(
+        { error: 'Something went wrong while checking your message. Please try again.' },
+        { status: 503 }
+      )
+    }
+    if (guard === 'UNSAFE') {
       return Response.json(
         { error: 'Your message was flagged as unsafe and could not be processed.' },
         { status: 400 }
